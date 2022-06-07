@@ -96,6 +96,10 @@ _C.ANYNET.SE_ON = False
 # SE ratio
 _C.ANYNET.SE_R = 0.25
 
+_C.ANYNET.DEVICES = []
+
+_C.ANYNET.ORIGINAL_WIDTHS = []
+
 
 # ---------------------------------- RegNet options ---------------------------------- #
 _C.REGNET = CfgNode()

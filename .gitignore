@@ -27,4 +27,5 @@ pycls/datasets/data/
 
 # Other
 logs/
+*.tflite
 scratch*
