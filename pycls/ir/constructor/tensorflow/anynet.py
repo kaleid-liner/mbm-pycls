@@ -8,6 +8,7 @@ def get_stem_fun(stem_type):
     """Retrieves the stem function by name."""
     stem_funs = {
         "res_stem_cifar": res_stem_cifar,
+        'res_stem_in': res_stem,
     }
     err_str = "Stem type '{}' not supported"
     assert stem_type in stem_funs.keys(), err_str.format(stem_type)
@@ -18,16 +19,56 @@ def get_block_fun(block_type):
     """Retrieves the block function by name."""
     block_funs = {
         "res_basic_block": res_basic_block,
+        'res_bottleneck_block': res_bottleneck_block,
     }
     err_str = "Block type '{}' not supported"
     assert block_type in block_funs.keys(), err_str.format(block_type)
     return block_funs[block_type]
 
 
-def res_stem_cifar(x, w_in, w_out, name):
+def res_stem_cifar(x, w_in, w_out, name, device):
+    name = name + "_" + device
     x = layers.Conv2D(w_out, 3, padding="same", name=name + "_conv")(x)
     x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_bn")(x)
     x = layers.ReLU(name=name + "_relu")(x)
+    return x
+
+
+def res_stem(x, w_in, w_out, name, device):
+    name_mp = name + "_mp_" + device
+    name = name + "_" + device
+    x = layers.Conv2D(w_out, 7, padding="same", name=name + "_conv")(x)
+    x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name+"_bn")(x)
+    x = layers.ReLU(name=name + "_relu")(x)
+    x = layers.MaxPool2D(3, 2, padding="same", name=name_mp + "_pool")(x)
+    return x
+
+
+def res_bottleneck_block(x, w_in, w_out, stride, name, params):
+    if (w_in != w_out) or (stride != 1):
+        x_proj = layers.Conv2D(w_out, 1, stride, padding="same", name=name + "_proj_conv")(x)
+        x_proj = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_proj_bn")(x_proj)
+    else:
+        x_proj = x
+
+    x = bottleneck_transform(x, w_in, w_out, stride, name, params)
+    x = x_proj + x
+    x = layers.ReLU(name=name + "_relu")(x)
+    return x
+    
+
+def bottleneck_transform(x, w_in, w_out, stride, name, params):
+    w_b = int(round(w_out * params["bot_mul"]))
+    w_se = int(round(w_in * params["se_r"]))
+    groups = w_b // params["group_w"]
+    x = layers.Conv2D(w_b, 1, padding="same", name=name + "_a_conv")(x)
+    x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_a_bn")(x)
+    x = layers.ReLU(name=name + "_a_relu")(x)
+    x = layers.Conv2D(w_b, 3, strides=stride, groups=groups, padding="same", name=name + "_b_conv")(x)
+    x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_b_bn")(x)
+    x = layers.ReLU(name=name + "_b_relu")(x)
+    x = layers.Conv2D(w_out, 1, padding="same", name=name + "_c_conv")(x)
+    x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_c_bn")(x)
     return x
 
 
@@ -37,7 +78,6 @@ def basic_transform(x, w_in, w_out, stride, name):
     x = layers.ReLU(name=name + "_0_relu")(x)
     x = layers.Conv2D(w_out, 3, padding="same", name=name + "_1_conv")(x)
     x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_1_bn")(x)
-    x = layers.ReLU(name=name + "_1_relu")(x)
     return x
 
 
@@ -60,7 +100,7 @@ def anyhead(x, w_in, head_width, num_classes, name):
         x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_bn")(x)
         x = layers.ReLU(name=name + "_relu")(x)
     
-    x = layers.GlobalAveragePooling2D()(x)
+    x = layers.GlobalAveragePooling2D(name=name + "_gap")(x)
     x = layers.Dense(num_classes, name=name + "_dense")(x)
     return x
 
@@ -74,6 +114,8 @@ def anystage(x, w_in, w_out, stride, d, block_fun, name, params):
 
 
 def meeting_point(inputs, w_in, devices, w_outs=None, name=""):
+    if len(inputs) == 1:
+        return inputs[0]
     if w_outs is None:
         w_outs = [w_in // len(inputs)] * len(inputs)
     return layers.Concatenate(name=name + "_concat")([
@@ -105,18 +147,21 @@ def anynet(input_shape=(224, 224, 3)):
     stem_fun = get_stem_fun(p["stem_type"])
     block_fun = get_block_fun(p["block_type"])
 
-    x = stem_fun(img_input, 3, p["stem_w"], "stem")
     prev_w = p["stem_w"]
     keys = ["depths", "widths", "strides", "bot_muls", "group_ws", "original_widths"]
     devices = p["devices"]
-    for i, (ds, ws, ss, b, g, o) in enumerate(zip(*[p[k] for k in keys])):
+    x = stem_fun(img_input, 3, p["stem_w"], "stem", devices[0])
+    for i, (ds, ws, ss, b, gs, o) in enumerate(zip(*[p[k] for k in keys])):
         x_outs = []
-        for device, d, w, s in zip(devices, ds, ws, ss):
+        x = block_fun(x, prev_w, o, s, name="s{}_{}_b0".format(i, devices[0]))
+        for device, d, w, s, g in zip(devices, ds, ws, ss, gs):
+            d -= 1
+            s = 1
             params = {"bot_mul": b, "group_w": g, "se_r": p["se_r"]}
-            x_outs.append(anystage(x, prev_w, w, s, d, block_fun, "s{}_{}".format(i, device), params))
+            x_outs.append(anystage(x, o, w, s, d, block_fun, "s{}_{}".format(i, device), params))
         x = meeting_point(x_outs, o, devices, name="s{}_mp".format(i))
         prev_w = o
 
-    x = anyhead(x, prev_w, p["head_w"], p["num_classes"], name="head")
+    x = anyhead(x, prev_w, p["head_w"], p["num_classes"], name="head_" + devices[0])
 
     return keras.Model(img_input, x, name="anynet")

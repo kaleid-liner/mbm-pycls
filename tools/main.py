@@ -2,8 +2,10 @@ import argparse
 import sys
 import pycls.core.config as config
 from pycls.core.config import cfg
-from pycls.ir.constructor.tensorflow.blocks import anynet
+from pycls.ir.constructor.tensorflow.anynet import anynet
+# from pycls.ir.constructor.pytorch.anynet import AnyNet
 import tensorflow as tf
+import torch
 
 
 def parse_args():
@@ -25,13 +27,16 @@ def main():
     config.assert_cfg()
     cfg.freeze()
 
+    # net = AnyNet()
+    # torch.onnx.export(net, torch.randn(1, 3, 224, 224), 'o_resnet50.onnx')
+
     net = anynet()
     net.summary()
 
     converter = tf.lite.TFLiteConverter.from_keras_model(net)
     tflite_model = converter.convert()
 
-    with open('resnet56.tflite', 'wb') as f:
+    with open('resnet50.tflite', 'wb') as f:
         f.write(tflite_model)
 
 

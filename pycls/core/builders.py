@@ -14,6 +14,7 @@ from pycls.models.effnet import EffNet
 from pycls.models.regnet import RegNet
 from pycls.models.resnet import ResNet
 from pycls.models.vit import ViT
+from pycls.ir.constructor.pytorch.anynet import AnyNet as MBAnyNet
 
 
 # Supported models
@@ -23,6 +24,7 @@ _models = {
     "resnet": ResNet,
     "regnet": RegNet,
     "vit": ViT,
+    "mbanynet": MBAnyNet,
 }
 
 
