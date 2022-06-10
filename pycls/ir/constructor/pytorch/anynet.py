@@ -340,7 +340,16 @@ class BranchStage(Module):
 
         if w_outs is None:
             w_outs = [ow // len(branches)] * len(branches)
-        self.branches = nn.ModuleList(branches)
+        self.branches = nn.ModuleList([
+            nn.Sequential(
+                conv2d(ow, w_in, 1),
+                norm2d(w_in),
+                branch
+            )
+            if w_in != ow
+            else branch
+            for w_in, branch in zip(w_ins, branches)
+        ])
         self.convs = nn.ModuleList([
             nn.Sequential(
                 conv2d(w_in, w_out, 1),
@@ -383,13 +392,15 @@ class AnyNet(Module):
         self.stem = stem_fun(3, p["stem_w"])
         prev_w = p["stem_w"]
         keys = ["depths", "widths", "strides", "bot_muls", "group_ws", "original_widths"]
-        devices = p["devices"]
 
         for i, (ds, ws, ss, b, gs, o) in enumerate(zip(*[p[k] for k in keys])):
             stage_branches = []
-            for device, d, w, s, g in zip(devices, ds, ws, ss, gs):
+            for j, (d, w, s, g) in enumerate(zip(ds, ws, ss, gs)):
                 params = {"bot_mul": b, "group_w": g, "se_r": p["se_r"]}
-                stage_branches.append(AnyStage(prev_w, w, s, d, block_fun, params))
+                if j == 0:
+                    self.add_module("s{}_downsample".format(i + 1), block_fun(prev_w, o, s, params))
+                d, s = d - 1, 1
+                stage_branches.append(AnyStage(w, w, s, d, block_fun, params))
             self.add_module("s{}".format(i + 1), BranchStage(stage_branches, o, ws))
             prev_w = o
 
