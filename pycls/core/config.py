@@ -336,6 +336,9 @@ _C.TRAIN.PCA_STD = 0.1
 # Data augmentation to use ("", "AutoAugment", "RandAugment_N2_M0.5", etc.)
 _C.TRAIN.AUGMENT = ""
 
+# Distillation
+_C.TRAIN.DISTILL = False
+
 
 # --------------------------------- Testing options ---------------------------------- #
 _C.TEST = CfgNode()

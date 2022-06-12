@@ -27,17 +27,17 @@ def main():
     config.assert_cfg()
     cfg.freeze()
 
-    net = builders.get_model()()
-    torch.onnx.export(net, torch.randn(1, 3, 224, 224), 'resnet50.onnx')
+    # net = builders.get_model()()
+    # torch.onnx.export(net, torch.randn(1, 3, 224, 224), 'resnet50.onnx')
 
-    # net = anynet()
-    # net.summary()
+    net = anynet()
+    net.summary()
 
-    # converter = tf.lite.TFLiteConverter.from_keras_model(net)
-    # tflite_model = converter.convert()
+    converter = tf.lite.TFLiteConverter.from_keras_model(net)
+    tflite_model = converter.convert()
 
-    # with open('resnet50.tflite', 'wb') as f:
-    #     f.write(tflite_model)
+    with open('resnet50.tflite', 'wb') as f:
+        f.write(tflite_model)
 
 
 if __name__ == "__main__":

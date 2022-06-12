@@ -22,6 +22,7 @@ import pycls.core.logging as logging
 import pycls.core.meters as meters
 import pycls.core.net as net
 import pycls.core.optimizer as optim
+import pycls.models as models
 import pycls.datasets.loader as data_loader
 import torch
 import torch.cuda.amp as amp
@@ -30,6 +31,7 @@ from fairscale.nn.data_parallel import FullyShardedDataParallel as FSDP
 from fairscale.optim.grad_scaler import ShardedGradScaler
 from pycls.core.config import cfg
 from pycls.core.io import cache_url, pathmgr
+from pycls.core.distiller import WSLDistiller
 
 
 logger = logging.get_logger(__name__)
@@ -157,12 +159,24 @@ def setup_model():
     cur_device = torch.cuda.current_device()
     model = model.cuda(device=cur_device)
     ema_model = ema_model.cuda(device=cur_device)
+
+    if cfg.TRAIN.DISTILL:
+        teacher_model = getattr(models, cfg.TRAIN.TEACHER)(cfg.TRAIN.TEACHER_NAME, True)
+        distiller_model = WSLDistiller(teacher_model, model)
+        distiller_model = model.cuda(device=cur_device)
+
     # Use multi-process data parallel model in the multi-gpu setting
     if cfg.NUM_GPUS > 1 and not cfg.FSDP.ENABLED:
         # Make model replica operate on the current device
         ddp = torch.nn.parallel.DistributedDataParallel
         model = ddp(module=model, device_ids=[cur_device], output_device=cur_device)
-    return model, ema_model
+        if cfg.TRAIN.DISTILL:
+            distiller_model = ddp(module=distiller_model, device_ids=[cur_device], output_device=[cur_device])
+        
+    if cfg.TRAIN.DISTILL:
+        return model, ema_model, distiller_model
+    else:
+        return model, ema_model, None
 
 
 def get_weights_file(weights_file):
@@ -174,7 +188,7 @@ def get_weights_file(weights_file):
     return weights_file
 
 
-def train_epoch(loader, model, ema, loss_fun, optimizer, scaler, meter, cur_epoch):
+def train_epoch(loader, model, ema, loss_fun, optimizer, scaler, meter, cur_epoch, distiller_model=None):
     """Performs one epoch of training."""
     # Shuffle the data
     if cfg.DATA_LOADER.MODE != data_loader.FFCV:
@@ -185,6 +199,7 @@ def train_epoch(loader, model, ema, loss_fun, optimizer, scaler, meter, cur_epoc
     # Enable training mode
     model.train()
     ema.train()
+    distiller_model.train()
     meter.reset()
     meter.iter_tic()
     for cur_iter, (inputs, labels) in enumerate(loader):
@@ -197,8 +212,11 @@ def train_epoch(loader, model, ema, loss_fun, optimizer, scaler, meter, cur_epoc
         inputs, labels_one_hot, labels = net.mixup(inputs, labels_one_hot)
         # Perform the forward pass and compute the loss
         with amp.autocast(enabled=cfg.TRAIN.MIXED_PRECISION):
-            preds = model(inputs)
-            loss = loss_fun(preds, labels_one_hot)
+            if cfg.TRAIN.DISTILL:
+                preds, loss = distiller_model(inputs, labels_one_hot)
+            else:
+                preds = model(inputs)
+                loss = loss_fun(preds, labels_one_hot)
         # Perform the backward pass and update the parameters
         optimizer.zero_grad()
         scaler.scale(loss).backward()
@@ -256,7 +274,7 @@ def train_model():
     # Setup training/testing environment
     setup_env()
     # Construct the model, ema, loss_fun, and optimizer
-    model, ema = setup_model()
+    model, ema, distiller = setup_model()
     loss_fun = builders.build_loss_fun().cuda()
     optimizer = optim.construct_optimizer(model)
     # Load checkpoint or initial weights
@@ -289,7 +307,7 @@ def train_model():
     for cur_epoch in range(start_epoch, cfg.OPTIM.MAX_EPOCH):
         # Train for one epoch
         params = (train_loader, model, ema, loss_fun, optimizer, scaler, train_meter)
-        train_epoch(*params, cur_epoch)
+        train_epoch(*params, cur_epoch, distiller)
         # Compute precise BN stats
         if cfg.BN.USE_PRECISE_STATS:
             net.compute_precise_bn_stats(model, train_loader)

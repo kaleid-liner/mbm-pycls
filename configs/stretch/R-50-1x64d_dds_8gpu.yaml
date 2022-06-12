@@ -22,6 +22,9 @@ TRAIN:
   DATASET: imagenet
   IM_SIZE: 224
   BATCH_SIZE: 256
+  DISTILL: True
+  TEACHER: resnet
+  TEACHER_NAME: ResNet-50
 TEST:
   DATASET: imagenet
   IM_SIZE: 256

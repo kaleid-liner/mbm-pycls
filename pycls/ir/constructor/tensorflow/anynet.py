@@ -4,6 +4,9 @@ import keras
 from pycls.core.config import cfg
 
 
+MP_END_FLAG = "stem"
+
+
 def get_stem_fun(stem_type):
     """Retrieves the stem function by name."""
     stem_funs = {
@@ -26,21 +29,18 @@ def get_block_fun(block_type):
     return block_funs[block_type]
 
 
-def res_stem_cifar(x, w_in, w_out, name, device):
-    name = name + "_" + device
+def res_stem_cifar(x, w_in, w_out, name):
     x = layers.Conv2D(w_out, 3, padding="same", name=name + "_conv")(x)
     x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_bn")(x)
     x = layers.ReLU(name=name + "_relu")(x)
     return x
 
 
-def res_stem(x, w_in, w_out, name, device):
-    name_mp = name + "_mp_" + device
-    name = name + "_" + device
+def res_stem(x, w_in, w_out, name):
     x = layers.Conv2D(w_out, 7, padding="same", name=name + "_conv")(x)
     x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name+"_bn")(x)
     x = layers.ReLU(name=name + "_relu")(x)
-    x = layers.MaxPool2D(3, 2, padding="same", name=name_mp + "_pool")(x)
+    x = layers.MaxPool2D(3, 2, padding="same", name=name + "_pool")(x)
     return x
 
 
@@ -52,7 +52,7 @@ def res_bottleneck_block(x, w_in, w_out, stride, name, params):
         x_proj = x
 
     x = bottleneck_transform(x, w_in, w_out, stride, name, params)
-    x = x_proj + x
+    x = layers.Add(name=name + "_add")([x_proj, x])
     x = layers.ReLU(name=name + "_relu")(x)
     return x
     
@@ -89,8 +89,8 @@ def res_basic_block(x, w_in, w_out, stride, name, params=None):
         x_proj = x
     
     x = basic_transform(x, w_in, w_out, stride, name)
-    x = x_proj + x
-    x = layers.ReLU(name=name + "_relu")(x)
+    x = layers.Add(name + "_add")([x_proj, x])
+    x = layers.ReLU(name + "_relu")(x)
     return x
 
 
@@ -107,7 +107,7 @@ def anyhead(x, w_in, head_width, num_classes, name):
 
 def anystage(x, w_in, w_out, stride, d, block_fun, name, params):
     for i in range(d):
-        x = block_fun(x, w_in, w_out, stride, name + "_b{}".format(i), params)
+        x = block_fun(x, w_in, w_out, stride, name + "_b{}".format(i + 1), params)
         stride, w_in = 1, w_out
 
     return x
@@ -118,6 +118,10 @@ def meeting_point(inputs, w_in, devices, w_outs=None, name=""):
         return inputs[0]
     if w_outs is None:
         w_outs = [w_in // len(inputs)] * len(inputs)
+    devices = [
+        "stem_" + d if d == devices[0] else d
+        for d in devices
+    ]
     return layers.Concatenate(name=name + "_concat")([
         layers.Conv2D(w_out, 1, padding="same", name=name + "_{}_conv".format(device))(x)
         for x, device, w_out in zip(inputs, devices, w_outs)
@@ -150,16 +154,21 @@ def anynet(input_shape=(224, 224, 3)):
     prev_w = p["stem_w"]
     keys = ["depths", "widths", "strides", "bot_muls", "group_ws", "original_widths"]
     devices = p["devices"]
-    x = stem_fun(img_input, 3, p["stem_w"], "stem", devices[0])
+    x = stem_fun(img_input, 3, p["stem_w"], "st_mp_" + devices[0])
+
     for i, (ds, ws, ss, b, gs, o) in enumerate(zip(*[p[k] for k in keys])):
         x_outs = []
-        x = block_fun(x, prev_w, o, s, name="s{}_{}_b0".format(i, devices[0]))
-        for device, d, w, s, g in zip(devices, ds, ws, ss, gs):
-            d -= 1
-            s = 1
+        for j, (device, d, w, s, g) in enumerate(zip(devices, ds, ws, ss, gs)):
             params = {"bot_mul": b, "group_w": g, "se_r": p["se_r"]}
-            x_outs.append(anystage(x, o, w, s, d, block_fun, "s{}_{}".format(i, device), params))
-        x = meeting_point(x_outs, o, devices, name="s{}_mp".format(i))
+            if j == 0:
+                x = block_fun(x, prev_w, o, s, "s{}_mp_{}_b0".format(i + 1, device), params)
+            if w != o:
+                x_out = layers.Conv2D(w, 1, padding="same", name="s{}_mp_{}_convfirst".format(i + 1, devices[0]))(x)
+            else:
+                x_out = x
+            d, s = d - 1, 1
+            x_outs.append(anystage(x_out, w, w, s, d, block_fun, "s{}_{}".format(i + 1, device), params))
+        x = meeting_point(x_outs, o, devices, name="s{}_mp".format(i + 1))
         prev_w = o
 
     x = anyhead(x, prev_w, p["head_w"], p["num_classes"], name="head_" + devices[0])
