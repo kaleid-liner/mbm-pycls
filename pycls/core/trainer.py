@@ -160,8 +160,9 @@ def setup_model():
     model = model.cuda(device=cur_device)
     ema_model = ema_model.cuda(device=cur_device)
 
+    distiller_model = None
     if cfg.TRAIN.DISTILL:
-        teacher_model = getattr(models, cfg.TRAIN.TEACHER)(cfg.TRAIN.TEACHER_NAME, True)
+        teacher_model = getattr(models.model_zoo, cfg.TRAIN.TEACHER)(cfg.TRAIN.TEACHER_NAME, True)
         distiller_model = WSLDistiller(teacher_model, model)
         distiller_model = model.cuda(device=cur_device)
 
@@ -173,10 +174,7 @@ def setup_model():
         if cfg.TRAIN.DISTILL:
             distiller_model = ddp(module=distiller_model, device_ids=[cur_device], output_device=cur_device)
         
-    if cfg.TRAIN.DISTILL:
-        return model, ema_model, distiller_model
-    else:
-        return model, ema_model, None
+    return model, ema_model, distiller_model
 
 
 def get_weights_file(weights_file):
@@ -199,7 +197,8 @@ def train_epoch(loader, model, ema, loss_fun, optimizer, scaler, meter, cur_epoc
     # Enable training mode
     model.train()
     ema.train()
-    distiller_model.train()
+    if cfg.TRAIN.DISTILL:
+        distiller_model.train()
     meter.reset()
     meter.iter_tic()
     for cur_iter, (inputs, labels) in enumerate(loader):

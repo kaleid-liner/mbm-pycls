@@ -338,6 +338,8 @@ _C.TRAIN.AUGMENT = ""
 
 # Distillation
 _C.TRAIN.DISTILL = False
+_C.TRAIN.TEACHER = ""
+_C.TRAIN.TEACHER_NAME = ""
 
 
 # --------------------------------- Testing options ---------------------------------- #
