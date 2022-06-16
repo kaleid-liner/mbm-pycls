@@ -4,7 +4,7 @@ import keras
 from pycls.core.config import cfg
 
 
-MP_END_FLAG = "stem"
+PARTITION_FLAG = "mb"
 
 
 def get_stem_fun(stem_type):
@@ -113,18 +113,14 @@ def anystage(x, w_in, w_out, stride, d, block_fun, name, params):
     return x
 
 
-def meeting_point(inputs, w_in, devices, w_outs=None, name=""):
+def meeting_point(inputs, w_in, w_outs=None, names=""):
     if len(inputs) == 1:
         return inputs[0]
     if w_outs is None:
         w_outs = [w_in // len(inputs)] * len(inputs)
-    devices = [
-        "stem_" + d if d == devices[0] else d
-        for d in devices
-    ]
-    return layers.Concatenate(name=name + "_concat")([
-        layers.Conv2D(w_out, 1, padding="same", name=name + "_{}_conv".format(device))(x)
-        for x, device, w_out in zip(inputs, devices, w_outs)
+    return layers.Concatenate(name=names[-1] + "_concat")([
+        layers.Conv2D(w_out, 1, padding="same", name=name + "_convlast")(x)
+        for x, w_out, name in zip(inputs, w_outs, names)
     ])
 
 
@@ -151,26 +147,37 @@ def anynet(input_shape=(224, 224, 3)):
     stem_fun = get_stem_fun(p["stem_type"])
     block_fun = get_block_fun(p["block_type"])
 
+    partition_ids = [1, 1]
+
     prev_w = p["stem_w"]
     keys = ["depths", "widths", "strides", "bot_muls", "group_ws", "original_widths"]
     devices = p["devices"]
-    x = stem_fun(img_input, 3, p["stem_w"], "st_mp_" + devices[0])
+    x = stem_fun(img_input, 3, p["stem_w"], "st_mp_{}{}_{}".format(PARTITION_FLAG, partition_ids[0], devices[0]))
 
     for i, (ds, ws, ss, b, gs, o) in enumerate(zip(*[p[k] for k in keys])):
         x_outs = []
+        convfirst_partition_id = partition_ids[0]
         for j, (device, d, w, s, g) in enumerate(zip(devices, ds, ws, ss, gs)):
             params = {"bot_mul": b, "group_w": g, "se_r": p["se_r"]}
             if j == 0:
-                x = block_fun(x, prev_w, o, s, "s{}_mp_{}_b0".format(i + 1, device), params)
+                x = block_fun(x, prev_w, o, s, "s{}_mp_{}{}_{}_b0".format(i + 1, PARTITION_FLAG, partition_ids[0], device), params)
+                partition_ids[0] += 1
             if w != o:
-                x_out = layers.Conv2D(w, 1, padding="same", name="s{}_mp_{}_convfirst".format(i + 1, devices[0]))(x)
+                # merge to the former gpu partition
+                x_out = layers.Conv2D(w, 1, padding="same", name="s{}_mp_{}{}_{}_convfirst{}".format(i + 1, PARTITION_FLAG, convfirst_partition_id, devices[0], j))(x)
             else:
                 x_out = x
             d, s = d - 1, 1
-            x_outs.append(anystage(x_out, w, w, s, d, block_fun, "s{}_{}".format(i + 1, device), params))
-        x = meeting_point(x_outs, o, devices, name="s{}_mp".format(i + 1))
+            x_outs.append(anystage(x_out, w, w, s, d, block_fun, "s{}_{}{}_{}".format(i + 1, PARTITION_FLAG, partition_ids[j], device), params))
+            partition_ids[j] += 1
+        x = meeting_point(x_outs, o, names=[
+            "s{}_{}{}_{}".format(i + 1, PARTITION_FLAG, partition_ids[0] - 1, devices[0]), # merge with previour partition
+            "s{}_{}{}_{}_{}".format(i + 1, PARTITION_FLAG, partition_ids[0], devices[0], devices[1]),
+            "s{}_mp_{}{}_{}".format(i + 1, PARTITION_FLAG, partition_ids[0] + 1, devices[0]),
+        ])
+        partition_ids[0] += 1
         prev_w = o
 
-    x = anyhead(x, prev_w, p["head_w"], p["num_classes"], name="head_" + devices[0])
+    x = anyhead(x, prev_w, p["head_w"], p["num_classes"], name="head_{}{}_{}".format(PARTITION_FLAG, partition_ids[0], devices[0]))
 
     return keras.Model(img_input, x, name="anynet")

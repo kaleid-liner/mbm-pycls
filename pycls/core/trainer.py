@@ -171,7 +171,7 @@ def setup_model():
         ddp = torch.nn.parallel.DistributedDataParallel
         model = ddp(module=model, device_ids=[cur_device], output_device=cur_device)
         if cfg.TRAIN.DISTILL:
-            distiller_model = ddp(module=distiller_model, device_ids=[cur_device], output_device=[cur_device])
+            distiller_model = ddp(module=distiller_model, device_ids=[cur_device], output_device=cur_device)
         
     if cfg.TRAIN.DISTILL:
         return model, ema_model, distiller_model
