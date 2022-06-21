@@ -3,15 +3,17 @@ MODEL:
   NUM_CLASSES: 1000
 ANYNET:
   STEM_TYPE: res_stem_in
-  STEM_W: 64
-  BLOCK_TYPE: res_bottleneck_block
-  STRIDES: [[1, 1], [2, 2], [2, 2], [2, 2]]
-  DEPTHS: [[2, 2], [2, 2], [4, 1], [2, 1]]
-  WIDTHS: [[256, 256], [512, 256], [1024, 512], [2048, 1024]]
-  BOT_MULS: [0.25, 0.25, 0.25, 0.25]
-  GROUP_WS: [[64, 64], [128, 64], [256, 128], [512, 256]]
+  STEM_W: 24
+  STEM_K: 3
+  HEAD_W: 1024
+  BLOCK_TYPE: inverted_residual
+  STRIDES: [[2, 2], [2, 2], [2, 2]]
+  DEPTHS: [[4, 4], [8, 8], [4, 4]]
+  WIDTHS: [[116, 116], [232, 232], [464, 464]]
+  BOT_MULS: [1, 1, 1]
+  GROUP_WS: [[1, 1], [1, 1], [1, 1]]
   DEVICES: ["gpu", "cpu"]
-  ORIGINAL_WIDTHS: [256, 512, 1024, 2048]
+  ORIGINAL_WIDTHS: [116, 232, 464]
 OPTIM:
   LR_POLICY: cos
   BASE_LR: 0.2
