@@ -22,6 +22,7 @@ from pycls.models.blocks import (
     pool2d,
     pool2d_cx,
     SE,
+    channel_shuffle,
 )
 from torch.nn import Module
 import torch.nn as nn
@@ -47,6 +48,7 @@ def get_block_fun(block_type):
         "res_basic_block": ResBasicBlock,
         "res_bottleneck_block": ResBottleneckBlock,
         "res_bottleneck_linear_block": ResBottleneckLinearBlock,
+        "inverted_residual": InvertedResidual,
     }
     err_str = "Block type '{}' not supported"
     assert block_type in block_funs.keys(), err_str.format(block_type)
@@ -246,10 +248,63 @@ class ResBottleneckLinearBlock(Module):
         return BottleneckTransform.complexity(cx, w_in, w_out, stride, params)
 
 
+class InvertedResidual(Module):
+
+    def __init__(self, w_in, w_out, stride, params=None):
+        super().__init__()
+
+        if not (1 <= stride <= 3):
+            raise ValueError("illegal stride value")
+        self.stride = stride
+
+        branch_features = w_out // 2
+        if (self.stride == 1) and (w_in != branch_features << 1):
+            raise ValueError(
+                f"Invalid combination of stride {stride}, inp {w_in} and oup {w_out} values. If stride == 1 then inp should be equal to oup // 2 << 1."
+            )
+
+        if self.stride > 1:
+            self.branch1 = nn.Sequential(
+                conv2d(w_in, w_in, 3, stride=self.stride, groups=w_in),
+                norm2d(w_in),
+                conv2d(w_in, branch_features, 1),
+                norm2d(branch_features),
+                activation(),
+            )
+        else:
+            self.branch1 = nn.Sequential()
+
+        self.branch2 = nn.Sequential(
+            conv2d(
+                w_in if (self.stride > 1) else branch_features,
+                branch_features,
+                1
+            ),
+            norm2d(branch_features),
+            activation(),
+            conv2d(branch_features, branch_features, 3, stride=self.stride, groups=branch_features),
+            norm2d(branch_features),
+            conv2d(branch_features, branch_features, 1),
+            norm2d(branch_features),
+            activation(),
+        )
+
+    def forward(self, x):
+        if self.stride == 1:
+            x1, x2 = x.chunk(2, dim=1)
+            out = torch.cat((x1, self.branch2(x2)), dim=1)
+        else:
+            out = torch.cat((self.branch1(x), self.branch2(x)), dim=1)
+
+        out = channel_shuffle(out, 2)
+
+        return out
+
+
 class ResStemCifar(Module):
     """ResNet stem for CIFAR: 3x3, BN, AF."""
 
-    def __init__(self, w_in, w_out):
+    def __init__(self, w_in, w_out, k=3):
         super(ResStemCifar, self).__init__()
         self.conv = conv2d(w_in, w_out, 3)
         self.bn = norm2d(w_out)
@@ -261,7 +316,7 @@ class ResStemCifar(Module):
         return x
 
     @staticmethod
-    def complexity(cx, w_in, w_out):
+    def complexity(cx, w_in, w_out, k=3):
         cx = conv2d_cx(cx, w_in, w_out, 3)
         cx = norm2d_cx(cx, w_out)
         return cx
@@ -270,9 +325,9 @@ class ResStemCifar(Module):
 class ResStem(Module):
     """ResNet stem for ImageNet: 7x7, BN, AF, MaxPool."""
 
-    def __init__(self, w_in, w_out):
+    def __init__(self, w_in, w_out, k=7):
         super(ResStem, self).__init__()
-        self.conv = conv2d(w_in, w_out, 7, stride=2)
+        self.conv = conv2d(w_in, w_out, k, stride=2)
         self.bn = norm2d(w_out)
         self.af = activation()
         self.pool = pool2d(w_out, 3, stride=2)
@@ -283,8 +338,8 @@ class ResStem(Module):
         return x
 
     @staticmethod
-    def complexity(cx, w_in, w_out):
-        cx = conv2d_cx(cx, w_in, w_out, 7, stride=2)
+    def complexity(cx, w_in, w_out, k=7):
+        cx = conv2d_cx(cx, w_in, w_out, k, stride=2)
         cx = norm2d_cx(cx, w_out)
         cx = pool2d_cx(cx, w_out, 3, stride=2)
         return cx
@@ -293,9 +348,9 @@ class ResStem(Module):
 class SimpleStem(Module):
     """Simple stem for ImageNet: 3x3, BN, AF."""
 
-    def __init__(self, w_in, w_out):
+    def __init__(self, w_in, w_out, k=3):
         super(SimpleStem, self).__init__()
-        self.conv = conv2d(w_in, w_out, 3, stride=2)
+        self.conv = conv2d(w_in, w_out, k, stride=2)
         self.bn = norm2d(w_out)
         self.af = activation()
 
@@ -305,7 +360,7 @@ class SimpleStem(Module):
         return x
 
     @staticmethod
-    def complexity(cx, w_in, w_out):
+    def complexity(cx, w_in, w_out, k=3):
         cx = conv2d_cx(cx, w_in, w_out, 3, stride=2)
         cx = norm2d_cx(cx, w_out)
         return cx
@@ -371,6 +426,7 @@ class AnyNet(Module):
         return {
             "stem_type": cfg.ANYNET.STEM_TYPE,
             "stem_w": cfg.ANYNET.STEM_W,
+            "stem_k": cfg.ANYNET.STEM_K,
             "block_type": cfg.ANYNET.BLOCK_TYPE,
             "depths": cfg.ANYNET.DEPTHS,
             "widths": cfg.ANYNET.WIDTHS,
@@ -389,7 +445,7 @@ class AnyNet(Module):
         p = AnyNet.get_params() if not params else params
         stem_fun = get_stem_fun(p["stem_type"])
         block_fun = get_block_fun(p["block_type"])
-        self.stem = stem_fun(3, p["stem_w"])
+        self.stem = stem_fun(3, p["stem_w"], p["stem_k"])
         prev_w = p["stem_w"]
         keys = ["depths", "widths", "strides", "bot_muls", "group_ws", "original_widths"]
 

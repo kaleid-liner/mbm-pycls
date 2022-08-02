@@ -8,12 +8,14 @@ ANYNET:
   HEAD_W: 1024
   BLOCK_TYPE: inverted_residual
   STRIDES: [[2, 2], [2, 2], [2, 2]]
-  DEPTHS: [[4, 4], [8, 8], [4, 4]]
-  WIDTHS: [[116, 116], [232, 232], [464, 464]]
+  DEPTHS: [[2, 2], [5, 5], [2, 2]]
+  WIDTHS: [[48, 48], [96, 96], [192, 192]]
   BOT_MULS: [1, 1, 1]
   GROUP_WS: [[1, 1], [1, 1], [1, 1]]
-  DEVICES: ["gpu", "cpu"]
-  ORIGINAL_WIDTHS: [116, 232, 464]
+  DEVICES: ["cpu", "gpu"]
+  ORIGINAL_WIDTHS: [48, 96, 192]
+  MB_DOWNSAMPLE: True
+  HEAD_DEVICE: 1
 OPTIM:
   LR_POLICY: cos
   BASE_LR: 0.2

@@ -268,9 +268,9 @@ class ResStemCifar(Module):
 class ResStem(Module):
     """ResNet stem for ImageNet: 7x7, BN, AF, MaxPool."""
 
-    def __init__(self, w_in, w_out):
+    def __init__(self, w_in, w_out, k=7):
         super(ResStem, self).__init__()
-        self.conv = conv2d(w_in, w_out, 7, stride=2)
+        self.conv = conv2d(w_in, w_out, k, stride=2)
         self.bn = norm2d(w_out)
         self.af = activation()
         self.pool = pool2d(w_out, 3, stride=2)
@@ -281,8 +281,8 @@ class ResStem(Module):
         return x
 
     @staticmethod
-    def complexity(cx, w_in, w_out):
-        cx = conv2d_cx(cx, w_in, w_out, 7, stride=2)
+    def complexity(cx, w_in, w_out, k=7):
+        cx = conv2d_cx(cx, w_in, w_out, k, stride=2)
         cx = norm2d_cx(cx, w_out)
         cx = pool2d_cx(cx, w_out, 3, stride=2)
         return cx

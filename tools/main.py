@@ -1,4 +1,5 @@
 import argparse
+from faulthandler import disable
 import sys
 import pycls.core.config as config
 from pycls.core.config import cfg
@@ -6,6 +7,7 @@ from pycls.ir.constructor.tensorflow.anynet import anynet
 import pycls.core.builders as builders
 import tensorflow as tf
 import torch
+from tensorflow.python.framework.ops import disable_eager_execution
 
 
 def parse_args():
@@ -28,7 +30,7 @@ def main():
     cfg.freeze()
 
     # net = builders.get_model()()
-    # torch.onnx.export(net, torch.randn(1, 3, 224, 224), 'resnet50.onnx')
+    # torch.onnx.export(net, torch.randn(1, 3, 224, 224), 'shufflenetv2_origin.onnx')
 
     net = anynet()
     net.summary()
@@ -36,9 +38,10 @@ def main():
     converter = tf.lite.TFLiteConverter.from_keras_model(net)
     tflite_model = converter.convert()
 
-    with open('resnet50.tflite', 'wb') as f:
+    with open('shufflenetv2_0.tflite', 'wb') as f:
         f.write(tflite_model)
 
 
 if __name__ == "__main__":
+    disable_eager_execution()
     main()

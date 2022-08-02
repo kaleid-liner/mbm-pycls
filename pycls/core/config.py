@@ -69,6 +69,9 @@ _C.ANYNET.STEM_TYPE = "simple_stem_in"
 # Stem width
 _C.ANYNET.STEM_W = 32
 
+# Stem kernel
+_C.ANYNET.STEM_K = 7
+
 # Block type
 _C.ANYNET.BLOCK_TYPE = "res_bottleneck_block"
 
@@ -99,6 +102,10 @@ _C.ANYNET.SE_R = 0.25
 _C.ANYNET.DEVICES = []
 
 _C.ANYNET.ORIGINAL_WIDTHS = []
+
+_C.ANYNET.MB_DOWNSAMPLE = False
+
+_C.ANYNET.HEAD_DEVICE = 0
 
 
 # ---------------------------------- RegNet options ---------------------------------- #
