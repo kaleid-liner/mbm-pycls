@@ -90,6 +90,8 @@ _C.ANYNET.BOT_MULS = []
 # Group widths for each stage (applies to bottleneck block)
 _C.ANYNET.GROUP_WS = []
 
+_C.ANYNET.KERNELS = []
+
 # Head width for first conv in head (if 0 conv is omitted, as is the default)
 _C.ANYNET.HEAD_W = 0
 
@@ -103,9 +105,13 @@ _C.ANYNET.DEVICES = []
 
 _C.ANYNET.ORIGINAL_WIDTHS = []
 
-_C.ANYNET.MB_DOWNSAMPLE = False
+_C.ANYNET.MB_DOWNSAMPLE = True
 
-_C.ANYNET.HEAD_DEVICE = 0
+_C.ANYNET.STEM_DEVICE = "cpu"
+
+_C.ANYNET.HEAD_DEVICE = "cpu"
+
+_C.ANYNET.MERGE_DEVICE = "cpu"
 
 
 # ---------------------------------- RegNet options ---------------------------------- #

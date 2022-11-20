@@ -3,9 +3,16 @@ import keras.layers as layers
 import keras
 import tensorflow as tf
 from pycls.core.config import cfg
+from pycls.ir.common import *
+from .op_patch import group_conv
 
 
-PARTITION_FLAG = "mb"
+def activation(x, name, mp_start=False):
+    if cfg.MODEL.ACTIVATION_FUN == "relu":
+        return layers.ReLU(name=name)(x)
+    elif cfg.MODEL.ACTIVATION_FUN == "swish" or cfg.MODEL.ACTIVATION_FUN == "silu":
+        mp_start_name = "{}_{}".format(name, MP_START) if mp_start else name
+        return layers.Multiply(name=mp_start_name + "_mul")([x, tf.nn.sigmoid(x, name=name + "_sigmoid")])
 
 
 def get_stem_fun(stem_type):
@@ -13,6 +20,7 @@ def get_stem_fun(stem_type):
     stem_funs = {
         "res_stem_cifar": res_stem_cifar,
         "res_stem_in": res_stem,
+        "simple_stem_in": simple_stem,
     }
     err_str = "Stem type '{}' not supported"
     assert stem_type in stem_funs.keys(), err_str.format(stem_type)
@@ -25,28 +33,41 @@ def get_block_fun(block_type):
         "res_basic_block": res_basic_block,
         "res_bottleneck_block": res_bottleneck_block,
         "inverted_residual": inverted_residual,
+        "mbconv": mbconv,
     }
     err_str = "Block type '{}' not supported"
     assert block_type in block_funs.keys(), err_str.format(block_type)
     return block_funs[block_type]
 
 
-def res_stem_cifar(x, w_in, w_out, k=3, name=""):
+def res_stem_cifar(x, w_in, w_out, k=3, name="", mp_start=False):
+    name = "{}_{}".format(name, MP_START) if mp_start else name
     x = layers.Conv2D(w_out, k, padding="same", name=name + "_conv")(x)
     x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_bn")(x)
     x = layers.ReLU(name=name + "_relu")(x)
     return x
 
 
-def res_stem(x, w_in, w_out, k=7, name=""):
+def res_stem(x, w_in, w_out, k=7, name="", mp_start=False):
     x = layers.Conv2D(w_out, k, strides=2, padding="same", name=name + "_conv")(x)
     x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name+"_bn")(x)
     x = layers.ReLU(name=name + "_relu")(x)
+    name = "{}_{}".format(name, MP_START) if mp_start else name
     x = layers.MaxPool2D(3, 2, padding="same", name=name + "_pool")(x)
     return x
 
 
-def res_bottleneck_block(x, w_in, w_out, stride, name, params):
+def simple_stem(x, w_in, w_out, k=3, name="", mp_start=False):
+    if cfg.MODEL.ACTIVATION_FUN == "relu":
+        name = "{}_{}".format(name, MP_START) if mp_start else name
+        mp_start = False
+    x = layers.Conv2D(w_out, k, strides=2, padding="same", name=name + "_conv")(x)
+    x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_bn")(x)
+    x = activation(x, name + "_act", mp_start=mp_start)
+    return x
+
+
+def res_bottleneck_block(x, w_in, w_out, stride, name, params, mp_start=False):
     if (w_in != w_out) or (stride != 1):
         x_proj = layers.Conv2D(w_out, 1, stride, padding="same", name=name + "_proj_conv")(x)
         x_proj = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_proj_bn")(x_proj)
@@ -54,36 +75,39 @@ def res_bottleneck_block(x, w_in, w_out, stride, name, params):
         x_proj = x
 
     x = bottleneck_transform(x, w_in, w_out, stride, name, params)
+    name = "{}_{}".format(name, MP_START) if mp_start else name
     x = layers.Add(name=name + "_add")([x_proj, x])
     x = layers.ReLU(name=name + "_relu")(x)
     return x
     
 
-def bottleneck_transform(x, w_in, w_out, stride, name, params):
+def bottleneck_transform(x, w_in, w_out, stride, name, params, mp_start=False):
     w_b = int(round(w_out * params["bot_mul"]))
     w_se = int(round(w_in * params["se_r"]))
     groups = w_b // params["group_w"]
     x = layers.Conv2D(w_b, 1, padding="same", name=name + "_a_conv")(x)
     x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_a_bn")(x)
     x = layers.ReLU(name=name + "_a_relu")(x)
-    x = layers.Conv2D(w_b, 3, strides=stride, groups=groups, padding="same", name=name + "_b_conv")(x)
+    x = group_conv(x, w_b, 3, strides=stride, padding="same", groups=groups, name=name + "_b_conv")
     x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_b_bn")(x)
     x = layers.ReLU(name=name + "_b_relu")(x)
+    name = "{}_{}".format(name, MP_START) if mp_start else name
     x = layers.Conv2D(w_out, 1, padding="same", name=name + "_c_conv")(x)
     x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_c_bn")(x)
     return x
 
 
-def basic_transform(x, w_in, w_out, stride, name):
+def basic_transform(x, w_in, w_out, stride, name, mp_start=False):
     x = layers.Conv2D(w_out, 3, stride, padding="same", name=name + "_0_conv")(x)
     x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_0_bn")(x)
     x = layers.ReLU(name=name + "_0_relu")(x)
+    name = "{}_{}".format(name, MP_START) if mp_start else name
     x = layers.Conv2D(w_out, 3, padding="same", name=name + "_1_conv")(x)
     x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_1_bn")(x)
     return x
 
 
-def res_basic_block(x, w_in, w_out, stride, name, params=None):
+def res_basic_block(x, w_in, w_out, stride, name, params=None, mp_start=False):
     if (w_in != w_out) or (stride != 1):
         x_proj = layers.Conv2D(w_out, 1, stride, padding="same", name=name + "_proj_conv")(x)
         x_proj = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_proj_bn")(x_proj)
@@ -91,8 +115,9 @@ def res_basic_block(x, w_in, w_out, stride, name, params=None):
         x_proj = x
     
     x = basic_transform(x, w_in, w_out, stride, name)
-    x = layers.Add(name + "_add")([x_proj, x])
-    x = layers.ReLU(name + "_relu")(x)
+    name = "{}_{}".format(name, MP_START) if mp_start else name
+    x = layers.Add(name=name + "_add")([x_proj, x])
+    x = layers.ReLU(name=name + "_relu")(x)
     return x
 
 
@@ -139,11 +164,35 @@ def inverted_residual(x, w_in, w_out, stride, name, params=None):
     return x
 
 
+def mbconv(x, w_in, w_out, stride, name, params, mp_start=False):
+    w_exp = int(w_in * params["bot_mul"])
+    k = params["k"]
+    f_x = x
+    if w_exp != w_in:
+        f_x = layers.Conv2D(w_exp, 1, padding="same", name=name + "_exp_conv")(f_x)
+        f_x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_exp_bn")(f_x)
+        f_x = activation(f_x, name + "_exp_act")
+    f_x = layers.DepthwiseConv2D(k, stride, padding="same", name=name + "_dw")(f_x)
+    f_x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_dw_bn")(f_x)
+    f_x = activation(f_x, name + "_dw_act")
+
+    has_skip = stride == 1 and w_in == w_out
+    mp_start_name = "{}_{}".format(name, MP_START)
+    if not has_skip:
+        name = mp_start_name if mp_start else name
+    f_x = layers.Conv2D(w_out, 1, padding="same", name=name + "_proj_conv")(f_x)
+    f_x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_proj_bn")(f_x)
+    if has_skip:
+        name = mp_start_name if mp_start else name
+        f_x = layers.Add(name=name + "_add")([x, f_x])
+    return f_x
+
+
 def anyhead(x, w_in, head_width, num_classes, name):
     if head_width > 0:
         x = layers.Conv2D(head_width, 1, padding="same", name=name + "_conv")(x)
         x = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS, name=name + "_bn")(x)
-        x = layers.ReLU(name=name + "_relu")(x)
+        x = activation(x, name + "_act")
     
     x = layers.GlobalAveragePooling2D(name=name + "_gap")(x)
     x = layers.Dense(num_classes, name=name + "_dense")(x)
@@ -158,7 +207,7 @@ def anystage(x, w_in, w_out, stride, d, block_fun, name, params):
     return x
 
 
-def meeting_point(inputs, w_ins, o_w, w_outs=None, names=""):
+def meeting_point(inputs, w_ins, o_w, w_outs=None, names=None):
     if len(inputs) == 1:
         return inputs[0]
     if w_outs is None:
@@ -170,7 +219,7 @@ def meeting_point(inputs, w_ins, o_w, w_outs=None, names=""):
     ])
 
 
-def anynet(input_shape=(224, 224, 3)):
+def anynet(input_shape=(224, 224, 3), include_head=True, include_stem=True):
     nones = [None for _ in cfg.ANYNET.DEPTHS]
     p = {
         "stem_type": cfg.ANYNET.STEM_TYPE,
@@ -180,6 +229,7 @@ def anynet(input_shape=(224, 224, 3)):
         "depths": cfg.ANYNET.DEPTHS,
         "widths": cfg.ANYNET.WIDTHS,
         "strides": cfg.ANYNET.STRIDES,
+        "kernels": cfg.ANYNET.KERNELS if cfg.ANYNET.KERNELS else nones,
         "bot_muls": cfg.ANYNET.BOT_MULS if cfg.ANYNET.BOT_MULS else nones,
         "group_ws": cfg.ANYNET.GROUP_WS if cfg.ANYNET.GROUP_WS else nones,
         "head_w": cfg.ANYNET.HEAD_W,
@@ -188,7 +238,9 @@ def anynet(input_shape=(224, 224, 3)):
         "devices": cfg.ANYNET.DEVICES,
         "original_widths": cfg.ANYNET.ORIGINAL_WIDTHS,
         "mb_downsample": cfg.ANYNET.MB_DOWNSAMPLE,
+        "stem_device": cfg.ANYNET.STEM_DEVICE,
         "head_device": cfg.ANYNET.HEAD_DEVICE,
+        "merge_device": cfg.ANYNET.MERGE_DEVICE,
     }
 
     img_input = layers.Input(shape=input_shape)
@@ -196,52 +248,52 @@ def anynet(input_shape=(224, 224, 3)):
     stem_fun = get_stem_fun(p["stem_type"])
     block_fun = get_block_fun(p["block_type"])
 
-    partition_ids = [1, 1]
-
     prev_w = p["stem_w"]
-    keys = ["depths", "widths", "strides", "bot_muls", "group_ws", "original_widths"]
+    keys = ["depths", "widths", "strides", "bot_muls", "group_ws", "original_widths", "kernels"]
     devices = p["devices"]
 
     x = stem_fun(img_input, 3, p["stem_w"], p["stem_k"], 
-        "st_mp_{}{}_{}".format(PARTITION_FLAG, partition_ids[p["head_device"]], devices[p["head_device"]])
+        name="st_{}".format(p["stem_device"]),
+        mp_start=p["mb_downsample"]
     )
-    partition_ids[p["head_device"]] += 1
 
-    for i, (ds, ws, ss, b, gs, o) in enumerate(zip(*[p[k] for k in keys])):
+    for i, (ds, ws, ss, b, gs, o, k) in enumerate(zip(*[p[k] for k in keys])):
         x_outs = []
-        convfirst_partition_id = partition_ids[0]
+        if gs is None:
+            gs = [None for _ in ds]
         for j, (device, d, w, s, g) in enumerate(zip(devices, ds, ws, ss, gs)):
-            params = {"bot_mul": b, "group_w": g, "se_r": p["se_r"]}
+            params = {"bot_mul": b, "group_w": g, "se_r": p["se_r"], "k": k}
             if p["mb_downsample"]:
                 x_out = x
             else:
                 if j == 0:
-                    partition_ids[0] -= 1
-                    x = block_fun(x, prev_w, o, s, "s{}_mp_{}{}_{}_b0".format(i + 1, PARTITION_FLAG, partition_ids[0], device), params)
-                    partition_ids[0] += 1
+                    x = block_fun(x, prev_w, o, s, 
+                        "s{}_{}_b0".format(i + 1, device), params, True)
                 if w != o:
-                    # merge to the former gpu partition
-                    x_out = layers.Conv2D(w, 1, padding="same", name="s{}_mp_{}{}_{}_convfirst{}".format(i + 1, PARTITION_FLAG, convfirst_partition_id, devices[0], j))(x)
+                    x_out = layers.Conv2D(w, 1, padding="same", 
+                        name="s{}_{}_convfirst".format(i + 1, device))(x)
                 else:
                     x_out = x
                 d, s, prev_w = d - 1, 1, w
-            x_outs.append(anystage(x_out, prev_w, w, s, d, block_fun, "s{}_{}{}_{}".format(i + 1, PARTITION_FLAG, partition_ids[j], device), params))
-            partition_ids[j] += 1
-        if devices[0] == "cpu":
-            x = meeting_point(x_outs, ws, o, names=[
-                "s{}_{}{}_{}".format(i + 1, PARTITION_FLAG, partition_ids[0] - 1, devices[0]), # merge with previous partition
-                "s{}_{}{}_{}".format(i + 1, PARTITION_FLAG, partition_ids[1] - 1, devices[1]), # merge with previous partition
-                "s{}_mp_{}".format(i + 1, devices[0]) if i < len(p["depths"]) - 1 else "s{}_mp_{}{}_{}".format(i + 1, PARTITION_FLAG, partition_ids[p["head_device"]], devices[p["head_device"]])
-            ])
-        else:
-            x = meeting_point(x_outs, ws, o, names=[
-                "s{}_{}{}_{}".format(i + 1, PARTITION_FLAG, partition_ids[0] - 1, devices[0]), # merge with previour partition
-                "s{}_{}{}_{}_{}".format(i + 1, PARTITION_FLAG, partition_ids[0], devices[0], devices[1]),
-                "s{}_mp_{}{}_{}".format(i + 1, PARTITION_FLAG, partition_ids[0] + 1, devices[0]),
-            ])
-            partition_ids[0] += 2
+            x_outs.append(
+                anystage(x_out, prev_w, w, s, d, block_fun, 
+                    "s{}_{}".format(i + 1, device), params)
+            )
+        mp_start = p["mb_downsample"] and i != len(p["depths"]) - 1
+        names = ["s{}_{}".format(i + 1, d) for d in devices]
+        names.append("s{}_{}{}_{}".format(
+            i + 1,
+            p["merge_device"],
+            "_" + MP_START if mp_start else "",
+            MP_END
+        ))
+        x = meeting_point(x_outs, ws, o, w_outs=ws, names=names)
         prev_w = o
 
-    x = anyhead(x, prev_w, p["head_w"], p["num_classes"], name="s{}_mp_{}{}_{}".format(i + 1, PARTITION_FLAG, partition_ids[p["head_device"]], devices[p["head_device"]]))
+    if include_head:
+        x = anyhead(x, prev_w, p["head_w"], p["num_classes"], 
+            name="head_{}".format(p["head_device"]))
+    else:
+        x = layers.Add(name="placeholder_add_{}".format(p["head_device"]))([x, x])
 
     return keras.Model(img_input, x, name="anynet")

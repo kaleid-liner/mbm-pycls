@@ -6,7 +6,9 @@ from pycls.core.config import cfg
 from pycls.ir.constructor.tensorflow.anynet import anynet
 import pycls.core.builders as builders
 import tensorflow as tf
+import numpy as np
 import torch
+from pycls.core.net import complexity
 from tensorflow.python.framework.ops import disable_eager_execution
 
 
@@ -15,11 +17,20 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Run a model.")
     help_s = "Config file location"
     parser.add_argument("--cfg", help=help_s, required=True, type=str)
+    parser.add_argument("--output", required=True, type=str)
+    parser.add_argument("--quant", required=False, action="store_true", dest="quant")
+    parser.set_defaults(quant=False)
     help_s = "See pycls/core/config.py for all options"
     if len(sys.argv) == 1:
         parser.print_help()
         sys.exit(1)
     return parser.parse_args()
+
+
+def representative_dataset():
+    for _ in range(100):
+      data = np.random.rand(1, 224, 224, 3)
+      yield [data.astype(np.float32)]
 
 
 def main():
@@ -29,17 +40,24 @@ def main():
     config.assert_cfg()
     cfg.freeze()
 
-    # net = builders.get_model()()
-    # torch.onnx.export(net, torch.randn(1, 3, 224, 224), 'shufflenetv2_origin.onnx')
+    net = builders.get_model()()
+    print(complexity(net))
+    torch.onnx.export(net, torch.randn(1, 3, 224, 224), args.output + ".onnx")
 
-    net = anynet()
-    net.summary()
+    # net = anynet()
+    # net.summary()
 
-    converter = tf.lite.TFLiteConverter.from_keras_model(net)
-    tflite_model = converter.convert()
+    # converter = tf.lite.TFLiteConverter.from_keras_model(net)
+    # if args.quant:
+    #     converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    #     converter.representative_dataset = representative_dataset
+    #     converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+    #     converter.inference_input_type = tf.uint8
+    #     converter.inference_output_type = tf.uint8
+    # tflite_model = converter.convert()
 
-    with open('shufflenetv2_0.tflite', 'wb') as f:
-        f.write(tflite_model)
+    # with open(args.output + ".quant" if args.quant else "" + ".tflite", 'wb') as f:
+    #     f.write(tflite_model)
 
 
 if __name__ == "__main__":

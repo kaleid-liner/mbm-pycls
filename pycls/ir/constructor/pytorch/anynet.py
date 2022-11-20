@@ -49,6 +49,7 @@ def get_block_fun(block_type):
         "res_bottleneck_block": ResBottleneckBlock,
         "res_bottleneck_linear_block": ResBottleneckLinearBlock,
         "inverted_residual": InvertedResidual,
+        "mbconv": MBConv,
     }
     err_str = "Block type '{}' not supported"
     assert block_type in block_funs.keys(), err_str.format(block_type)
@@ -301,6 +302,49 @@ class InvertedResidual(Module):
         return out
 
 
+class MBConv(Module):
+
+    def __init__(self, w_in, w_out, stride, params=None):
+        super().__init__()
+        self.exp = None
+        w_exp = int(w_in * params["bot_mul"])
+        k = params["k"]
+        if w_exp != w_in:
+            self.exp = conv2d(w_in, w_exp, 1)
+            self.exp_bn = norm2d(w_exp)
+            self.exp_af = activation()
+        self.dwise = conv2d(w_exp, w_exp, k, stride=stride, groups=w_exp)
+        self.dwise_bn = norm2d(w_exp)
+        self.dwise_af = activation()
+        self.se = SE(w_exp, int(w_in * params["se_r"]))
+        self.lin_proj = conv2d(w_exp, w_out, 1)
+        self.lin_proj_bn = norm2d(w_out)
+        self.has_skip = stride == 1 and w_in == w_out
+
+    def forward(self, x):
+        f_x = self.exp_af(self.exp_bn(self.exp(x))) if self.exp else x
+        f_x = self.dwise_af(self.dwise_bn(self.dwise(f_x)))
+        f_x = self.se(f_x)
+        f_x = self.lin_proj_bn(self.lin_proj(f_x))
+        if self.has_skip:
+            f_x = x + f_x
+        return f_x
+
+    @staticmethod
+    def complexity(cx, w_in, w_out, stride, params):
+        w_exp = int(w_in * params["bot_mul"])
+        k = params["k"]
+        if w_exp != w_in:
+            cx = conv2d_cx(cx, w_in, w_exp, 1)
+            cx = norm2d_cx(cx, w_exp)
+        cx = conv2d_cx(cx, w_exp, w_exp, k, stride=stride, groups=w_exp)
+        cx = norm2d_cx(cx, w_exp)
+        cx = SE.complexity(cx, w_exp, int(w_in * params["se_r"]))
+        cx = conv2d_cx(cx, w_exp, w_out, 1)
+        cx = norm2d_cx(cx, w_out)
+        return cx
+
+
 class ResStemCifar(Module):
     """ResNet stem for CIFAR: 3x3, BN, AF."""
 
@@ -361,7 +405,7 @@ class SimpleStem(Module):
 
     @staticmethod
     def complexity(cx, w_in, w_out, k=3):
-        cx = conv2d_cx(cx, w_in, w_out, 3, stride=2)
+        cx = conv2d_cx(cx, w_in, w_out, k, stride=2)
         cx = norm2d_cx(cx, w_out)
         return cx
 
@@ -397,24 +441,17 @@ class BranchStage(Module):
             w_outs = [ow // len(branches)] * len(branches)
         self.branches = nn.ModuleList([
             nn.Sequential(
-                conv2d(ow, w_in, 1),
-                norm2d(w_in),
-                branch
-            )
-            if w_in != ow
-            else branch
-            for w_in, branch in zip(w_ins, branches)
-        ])
-        self.convs = nn.ModuleList([
-            nn.Sequential(
+                branch,
                 conv2d(w_in, w_out, 1),
                 norm2d(w_out)
             )
-            for w_in, w_out in zip(w_ins, w_outs)
+            if w_in != w_out
+            else branch
+            for w_in, w_out, branch in zip(w_ins, w_outs, branches)
         ])
 
     def forward(self, x):
-        return torch.cat([conv(branch(x)) for branch, conv in zip(self.branches, self.convs)], 1)
+        return torch.cat([branch(x) for branch in self.branches], 1)
 
 
 class AnyNet(Module):
@@ -431,6 +468,7 @@ class AnyNet(Module):
             "depths": cfg.ANYNET.DEPTHS,
             "widths": cfg.ANYNET.WIDTHS,
             "strides": cfg.ANYNET.STRIDES,
+            "kernels": cfg.ANYNET.KERNELS if cfg.ANYNET.KERNELS else nones,
             "bot_muls": cfg.ANYNET.BOT_MULS if cfg.ANYNET.BOT_MULS else nones,
             "group_ws": cfg.ANYNET.GROUP_WS if cfg.ANYNET.GROUP_WS else nones,
             "head_w": cfg.ANYNET.HEAD_W,
@@ -447,17 +485,16 @@ class AnyNet(Module):
         block_fun = get_block_fun(p["block_type"])
         self.stem = stem_fun(3, p["stem_w"], p["stem_k"])
         prev_w = p["stem_w"]
-        keys = ["depths", "widths", "strides", "bot_muls", "group_ws", "original_widths"]
+        keys = ["depths", "widths", "strides", "bot_muls", "group_ws", "original_widths", "kernels"]
 
-        for i, (ds, ws, ss, b, gs, o) in enumerate(zip(*[p[k] for k in keys])):
+        for i, (ds, ws, ss, b, gs, o, k) in enumerate(zip(*[p[k] for k in keys])):
             stage_branches = []
+            if gs is None:
+                gs = [None for _ in ds]
             for j, (d, w, s, g) in enumerate(zip(ds, ws, ss, gs)):
-                params = {"bot_mul": b, "group_w": g, "se_r": p["se_r"]}
-                if j == 0:
-                    self.add_module("s{}_downsample".format(i + 1), block_fun(prev_w, o, s, params))
-                d, s = d - 1, 1
-                stage_branches.append(AnyStage(w, w, s, d, block_fun, params))
-            self.add_module("s{}".format(i + 1), BranchStage(stage_branches, o, ws))
+                params = {"bot_mul": b, "group_w": g, "se_r": p["se_r"], "k": k}
+                stage_branches.append(AnyStage(prev_w, w, s, d, block_fun, params))
+            self.add_module("s{}".format(i + 1), BranchStage(stage_branches, o, ws, ws))
             prev_w = o
 
         self.head = AnyHead(prev_w, p["head_w"], p["num_classes"])
@@ -471,15 +508,20 @@ class AnyNet(Module):
     @staticmethod
     def complexity(cx, params=None):
         """Computes model complexity (if you alter the model, make sure to update)."""
-        # p = AnyNet.get_params() if not params else params
-        # stem_fun = get_stem_fun(p["stem_type"])
-        # block_fun = get_block_fun(p["block_type"])
-        # cx = stem_fun.complexity(cx, 3, p["stem_w"])
-        # prev_w = p["stem_w"]
-        # keys = ["depths", "widths", "strides", "bot_muls", "group_ws"]
-        # for d, w, s, b, g in zip(*[p[k] for k in keys]):
-        #     params = {"bot_mul": b, "group_w": g, "se_r": p["se_r"]}
-        #     cx = AnyStage.complexity(cx, prev_w, w, s, d, block_fun, params)
-        #     prev_w = w
-        # cx = AnyHead.complexity(cx, prev_w, p["head_w"], p["num_classes"])
-        return {"flops": 0, "params": 0, "acts": 0}
+        p = AnyNet.get_params() if not params else params
+        stem_fun = get_stem_fun(p["stem_type"])
+        block_fun = get_block_fun(p["block_type"])
+        cx = stem_fun.complexity(cx, 3, p["stem_w"], p["stem_k"])
+        prev_w = p["stem_w"]
+        keys = ["depths", "widths", "strides", "bot_muls", "group_ws", "original_widths", "kernels"]
+        for i, (ds, ws, ss, b, gs, o, k) in enumerate(zip(*[p[k] for k in keys])):
+            if gs is None:
+                gs = [None for _ in ds]
+            old_h, old_w = cx["h"], cx["w"]
+            for j, (d, w, s, g) in enumerate(zip(ds, ws, ss, gs)):
+                params = {"bot_mul": b, "group_w": g, "se_r": p["se_r"], "k": k}
+                cx["h"], cx["w"] = old_h, old_w
+                cx = AnyStage.complexity(cx, prev_w, w, s, d, block_fun, params)
+            prev_w = o
+        cx = AnyHead.complexity(cx, prev_w, p["head_w"], p["num_classes"])
+        return cx

@@ -1,0 +1,18 @@
+MODEL:
+  TYPE: mbanynet
+  NUM_CLASSES: 1000
+ANYNET:
+  STEM_TYPE: simple_stem_in
+  STEM_W: 32
+  STEM_K: 3
+  BLOCK_TYPE: res_bottleneck_block
+  STRIDES: [[2, 2], [2, 2], [2, 2], [2, 2]]
+  DEPTHS: [[3, 2], [3, 5], [9, 12], [2, 2]]
+  WIDTHS: [[40, 40], [160, 80], [480, 240], [1040, 680]]
+  BOT_MULS: [1, 1, 1, 1]
+  GROUP_WS: [[40, 40], [40, 40], [40, 40], [40, 40]]
+  DEVICES: ["cpu", "gpu"]
+  HEAD_DEVICE: 0
+  STEM_DEVICE: 0
+  MERGE_DEVICE: 0
+  ORIGINAL_WIDTHS: [80, 240, 720, 1720]
