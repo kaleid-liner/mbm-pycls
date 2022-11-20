@@ -4,6 +4,7 @@ MODEL:
 ANYNET:
   STEM_TYPE: res_stem_in
   STEM_W: 64
+  STEM_K: 3
   BLOCK_TYPE: res_basic_block
   STRIDES: [[1, 1], [2, 2], [2, 2], [2, 2]]
   DEPTHS: [[3, 2], [3, 3], [6, 5], [3, 2]]
@@ -11,9 +12,9 @@ ANYNET:
   BOT_MULS: [1, 1, 1, 1]
   GROUP_WS: [[32, 64], [80, 64], [144, 160], [256, 320]]
   DEVICES: ["cpu", "dsp"]
-  HEAD_DEVICE: 0
-  STEM_DEVICE: 0
-  MERGE_DEVICE: 0
+  HEAD_DEVICE: "cpu"
+  STEM_DEVICE: "cpu"
+  MERGE_DEVICE: "cpu"
   ORIGINAL_WIDTHS: [96, 144, 304, 576]
 OPTIM:
   LR_POLICY: cos
@@ -22,12 +23,11 @@ OPTIM:
   MOMENTUM: 0.9
   WEIGHT_DECAY: 5e-5
 TRAIN:
-  DATASET: imagenet
+  DATASET: imagenet-tar
   IM_SIZE: 224
   BATCH_SIZE: 256
-  DISTILL: False
 TEST:
-  DATASET: imagenet
+  DATASET: imagenet-tar
   IM_SIZE: 256
   BATCH_SIZE: 200
 NUM_GPUS: 8

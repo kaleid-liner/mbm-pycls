@@ -12,7 +12,7 @@ import os
 import torch
 from pycls.core.config import cfg
 from pycls.datasets.cifar10 import Cifar10
-from pycls.datasets.imagenet import ImageNet, ImageNetFFCV
+from pycls.datasets.imagenet import ImageNet, ImageNetFFCV, ImageTarDataset
 from torch.utils.data.distributed import DistributedSampler
 from torch.utils.data.sampler import RandomSampler
 
@@ -29,14 +29,14 @@ except ImportError:
 FFCV = "ffcv"
 
 # Supported datasets
-_DATASETS = {"cifar10": Cifar10, "imagenet": ImageNet}
+_DATASETS = {"cifar10": Cifar10, "imagenet": ImageNet, "imagenet-tar": ImageTarDataset}
 _FFCV_DATASETS = {"imagenet": ImageNetFFCV}
 
 # Default data directory (/path/pycls/pycls/datasets/data)
 _DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
 # Relative data paths to default data directory
-_PATHS = {"cifar10": "cifar10", "imagenet": "imagenet"}
+_PATHS = {"cifar10": "cifar10", "imagenet": "imagenet", "imagenet-tar": "imagenet-tar"}
 
 
 def _construct_loader(dataset_name, split, batch_size, shuffle, drop_last):
@@ -44,7 +44,7 @@ def _construct_loader(dataset_name, split, batch_size, shuffle, drop_last):
     err_str = "Dataset '{}' not supported".format(dataset_name)
     assert dataset_name in _DATASETS and dataset_name in _PATHS, err_str
     # Retrieve the data path for the dataset
-    data_path = os.path.join(_DATA_DIR, _PATHS[dataset_name])
+    data_path = cfg.DATA_PATH or os.path.join(_DATA_DIR, _PATHS[dataset_name])
     # Construct the dataset
     dataset = _DATASETS[dataset_name](data_path, split)
     # Create a sampler for multi-process training

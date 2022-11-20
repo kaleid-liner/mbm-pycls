@@ -474,6 +474,8 @@ _C.PORT_RANGE = [10000, 65000]
 # Models weights referred to by URL are downloaded to this local cache
 _C.DOWNLOAD_CACHE = "/tmp/pycls-download-cache"
 
+_C.DATA_PATH = ""
+
 
 # ---------------------------------- Default config ---------------------------------- #
 _CFG_DEFAULT = _C.clone()
