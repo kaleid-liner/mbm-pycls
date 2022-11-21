@@ -42,21 +42,23 @@ def main():
 
     net = builders.get_model()()
     print(complexity(net))
+    net.eval()
+    torch.onnx.export(net, torch.randn(1, 3, 224, 224), args.output + (".quant" if args.quant else "") + ".onnx")
 
-    net = anynet()
-    # net.summary()
+    # net = anynet()
+    # # net.summary()
 
-    converter = tf.lite.TFLiteConverter.from_keras_model(net)
-    if args.quant:
-        converter.optimizations = [tf.lite.Optimize.DEFAULT]
-        converter.representative_dataset = representative_dataset
-        converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
-        converter.inference_input_type = tf.uint8
-        converter.inference_output_type = tf.uint8
-    tflite_model = converter.convert()
+    # converter = tf.lite.TFLiteConverter.from_keras_model(net)
+    # if args.quant:
+    #     converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    #     converter.representative_dataset = representative_dataset
+    #     converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+    #     converter.inference_input_type = tf.uint8
+    #     converter.inference_output_type = tf.uint8
+    # tflite_model = converter.convert()
 
-    with open(args.output + (".quant" if args.quant else "") + ".tflite", 'wb') as f:
-        f.write(tflite_model)
+    # with open(args.output + (".quant" if args.quant else "") + ".tflite", 'wb') as f:
+    #     f.write(tflite_model)
 
 
 if __name__ == "__main__":

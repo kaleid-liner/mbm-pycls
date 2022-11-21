@@ -4,13 +4,17 @@ import keras
 import tensorflow as tf
 from pycls.core.config import cfg
 from pycls.ir.common import *
+from pycls.ir.utils import make_divisible
 from .op_patch import group_conv
 
 
 def activation(x, name, mp_start=False):
-    if cfg.MODEL.ACTIVATION_FUN == "relu":
+    activation_fun = cfg.MODEL.ACTIVATION_FUN
+    if "cpu" in name and not mp_start:
+        activation_fun = "relu"
+    if activation_fun == "relu":
         return layers.ReLU(name=name)(x)
-    elif cfg.MODEL.ACTIVATION_FUN == "swish" or cfg.MODEL.ACTIVATION_FUN == "silu":
+    elif activation_fun == "swish" or activation_fun == "silu":
         mp_start_name = "{}_{}".format(name, MP_START) if mp_start else name
         return layers.Multiply(name=mp_start_name + "_mul")([x, tf.nn.sigmoid(x, name=name + "_sigmoid")])
 
@@ -241,6 +245,7 @@ def anynet(input_shape=(224, 224, 3), include_head=True, include_stem=True):
         "stem_device": cfg.ANYNET.STEM_DEVICE,
         "head_device": cfg.ANYNET.HEAD_DEVICE,
         "merge_device": cfg.ANYNET.MERGE_DEVICE,
+        "mb_ver": cfg.ANYNET.MB_VER
     }
 
     img_input = layers.Input(shape=input_shape)
@@ -257,11 +262,13 @@ def anynet(input_shape=(224, 224, 3), include_head=True, include_stem=True):
         mp_start=p["mb_downsample"]
     )
 
-    for i, (ds, ws, ss, b, gs, o, k) in enumerate(zip(*[p[k] for k in keys])):
+    for i, (ds, ws, ss, bs, gs, o, k) in enumerate(zip(*[p[k] for k in keys])):
         x_outs = []
         if gs is None:
             gs = [None for _ in ds]
-        for j, (device, d, w, s, g) in enumerate(zip(devices, ds, ws, ss, gs)):
+        if not isinstance(bs, list):
+            bs = [bs for _ in ds]
+        for j, (device, d, w, s, b, g) in enumerate(zip(devices, ds, ws, ss, bs, gs)):
             params = {"bot_mul": b, "group_w": g, "se_r": p["se_r"], "k": k}
             if p["mb_downsample"]:
                 x_out = x
@@ -275,10 +282,18 @@ def anynet(input_shape=(224, 224, 3), include_head=True, include_stem=True):
                 else:
                     x_out = x
                 d, s, prev_w = d - 1, 1, w
-            x_outs.append(
-                anystage(x_out, prev_w, w, s, d, block_fun, 
+            if p["mb_ver"] == 1:
+                w_in = make_divisible(w / o * prev_w, 8)
+                x_out = layers.Conv2D(w_in, 1, padding="same",
+                    name="s{}_{}_convfirst".format(i + 1, device))(x_out)
+                x_out = layers.BatchNormalization(axis=3, momentum=cfg.BN.MOM, epsilon=cfg.BN.EPS,
+                    name="s{}_{}_convfirst_bn".format(i + 1, device))(x_out)
+                x_out = anystage(x_out, w_in, w, s, d, block_fun, 
                     "s{}_{}".format(i + 1, device), params)
-            )
+            elif p["mb_ver"] == 2:
+                x_out = anystage(x_out, prev_w, w, s, d, block_fun, 
+                    "s{}_{}".format(i + 1, device), params)
+            x_outs.append(x_out)
         mp_start = p["mb_downsample"] and i != len(p["depths"]) - 1
         names = ["s{}_{}".format(i + 1, d) for d in devices]
         names.append("s{}_{}{}_{}".format(
@@ -287,7 +302,11 @@ def anynet(input_shape=(224, 224, 3), include_head=True, include_stem=True):
             "_" + MP_START if mp_start else "",
             MP_END
         ))
-        x = meeting_point(x_outs, ws, o, w_outs=ws, names=names)
+        if p["mb_ver"] == 1:
+            w_outs = None
+        elif p["mb_ver"] == 2:
+            w_outs = ws
+        x = meeting_point(x_outs, ws, o, w_outs=w_outs, names=names)
         prev_w = o
 
     if include_head:

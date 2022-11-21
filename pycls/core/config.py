@@ -113,6 +113,10 @@ _C.ANYNET.HEAD_DEVICE = "cpu"
 
 _C.ANYNET.MERGE_DEVICE = "cpu"
 
+_C.ANYNET.MB_VER = 2
+
+_C.ANYNET.ACTIVATION_FUN = []
+
 
 # ---------------------------------- RegNet options ---------------------------------- #
 _C.REGNET = CfgNode()

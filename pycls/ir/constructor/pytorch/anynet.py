@@ -28,6 +28,8 @@ from torch.nn import Module
 import torch.nn as nn
 import torch
 
+from pycls.ir.utils import make_divisible
+
 
 def get_stem_fun(stem_type):
     """Retrieves the stem function by name."""
@@ -91,14 +93,14 @@ class AnyHead(Module):
 class VanillaBlock(Module):
     """Vanilla block: [3x3 conv, BN, Relu] x2."""
 
-    def __init__(self, w_in, w_out, stride, _params):
+    def __init__(self, w_in, w_out, stride, params):
         super(VanillaBlock, self).__init__()
         self.a = conv2d(w_in, w_out, 3, stride=stride)
         self.a_bn = norm2d(w_out)
-        self.a_af = activation()
+        self.a_af = activation(params["af"])
         self.b = conv2d(w_out, w_out, 3)
         self.b_bn = norm2d(w_out)
-        self.b_af = activation()
+        self.b_af = activation(params["af"])
 
     def forward(self, x):
         for layer in self.children():
@@ -117,11 +119,11 @@ class VanillaBlock(Module):
 class BasicTransform(Module):
     """Basic transformation: [3x3 conv, BN, Relu] x2."""
 
-    def __init__(self, w_in, w_out, stride, _params):
+    def __init__(self, w_in, w_out, stride, params):
         super(BasicTransform, self).__init__()
         self.a = conv2d(w_in, w_out, 3, stride=stride)
         self.a_bn = norm2d(w_out)
-        self.a_af = activation()
+        self.a_af = activation(params["af"])
         self.b = conv2d(w_out, w_out, 3)
         self.b_bn = norm2d(w_out)
         self.b_bn.final_bn = True
@@ -150,7 +152,7 @@ class ResBasicBlock(Module):
             self.proj = conv2d(w_in, w_out, 1, stride=stride)
             self.bn = norm2d(w_out)
         self.f = BasicTransform(w_in, w_out, stride, params)
-        self.af = activation()
+        self.af = activation(params["af"])
 
     def forward(self, x):
         x_p = self.bn(self.proj(x)) if self.proj else x
@@ -177,10 +179,10 @@ class BottleneckTransform(Module):
         groups = w_b // params["group_w"]
         self.a = conv2d(w_in, w_b, 1)
         self.a_bn = norm2d(w_b)
-        self.a_af = activation()
+        self.a_af = activation(params["af"])
         self.b = conv2d(w_b, w_b, 3, stride=stride, groups=groups)
         self.b_bn = norm2d(w_b)
-        self.b_af = activation()
+        self.b_af = activation(params["af"])
         self.se = SE(w_b, w_se) if w_se else None
         self.c = conv2d(w_b, w_out, 1)
         self.c_bn = norm2d(w_out)
@@ -216,7 +218,7 @@ class ResBottleneckBlock(Module):
             self.proj = conv2d(w_in, w_out, 1, stride=stride)
             self.bn = norm2d(w_out)
         self.f = BottleneckTransform(w_in, w_out, stride, params)
-        self.af = activation()
+        self.af = activation(params["af"])
 
     def forward(self, x):
         x_p = self.bn(self.proj(x)) if self.proj else x
@@ -270,7 +272,7 @@ class InvertedResidual(Module):
                 norm2d(w_in),
                 conv2d(w_in, branch_features, 1),
                 norm2d(branch_features),
-                activation(),
+                activation(params["af"]),
             )
         else:
             self.branch1 = nn.Sequential()
@@ -282,12 +284,12 @@ class InvertedResidual(Module):
                 1
             ),
             norm2d(branch_features),
-            activation(),
+            activation(params["af"]),
             conv2d(branch_features, branch_features, 3, stride=self.stride, groups=branch_features),
             norm2d(branch_features),
             conv2d(branch_features, branch_features, 1),
             norm2d(branch_features),
-            activation(),
+            activation(params["af"]),
         )
 
     def forward(self, x):
@@ -308,15 +310,16 @@ class MBConv(Module):
         super().__init__()
         self.exp = None
         w_exp = int(w_in * params["bot_mul"])
+        w_se = int(w_in * params["se_r"])
         k = params["k"]
         if w_exp != w_in:
             self.exp = conv2d(w_in, w_exp, 1)
             self.exp_bn = norm2d(w_exp)
-            self.exp_af = activation()
+            self.exp_af = activation(params["af"])
         self.dwise = conv2d(w_exp, w_exp, k, stride=stride, groups=w_exp)
         self.dwise_bn = norm2d(w_exp)
-        self.dwise_af = activation()
-        self.se = SE(w_exp, int(w_in * params["se_r"]))
+        self.dwise_af = activation(params["af"])
+        self.se = SE(w_exp, w_se) if w_se else None
         self.lin_proj = conv2d(w_exp, w_out, 1)
         self.lin_proj_bn = norm2d(w_out)
         self.has_skip = stride == 1 and w_in == w_out
@@ -324,7 +327,7 @@ class MBConv(Module):
     def forward(self, x):
         f_x = self.exp_af(self.exp_bn(self.exp(x))) if self.exp else x
         f_x = self.dwise_af(self.dwise_bn(self.dwise(f_x)))
-        f_x = self.se(f_x)
+        f_x = self.se(f_x) if self.se else f_x
         f_x = self.lin_proj_bn(self.lin_proj(f_x))
         if self.has_skip:
             f_x = x + f_x
@@ -333,13 +336,14 @@ class MBConv(Module):
     @staticmethod
     def complexity(cx, w_in, w_out, stride, params):
         w_exp = int(w_in * params["bot_mul"])
+        w_se = int(w_in * params["se_r"])
         k = params["k"]
         if w_exp != w_in:
             cx = conv2d_cx(cx, w_in, w_exp, 1)
             cx = norm2d_cx(cx, w_exp)
         cx = conv2d_cx(cx, w_exp, w_exp, k, stride=stride, groups=w_exp)
         cx = norm2d_cx(cx, w_exp)
-        cx = SE.complexity(cx, w_exp, int(w_in * params["se_r"]))
+        cx = SE.complexity(cx, w_exp, w_se) if w_se else cx
         cx = conv2d_cx(cx, w_exp, w_out, 1)
         cx = norm2d_cx(cx, w_out)
         return cx
@@ -475,7 +479,9 @@ class AnyNet(Module):
             "se_r": cfg.ANYNET.SE_R if cfg.ANYNET.SE_ON else 0,
             "num_classes": cfg.MODEL.NUM_CLASSES,
             "devices": cfg.ANYNET.DEVICES,
-            "original_widths": cfg.ANYNET.ORIGINAL_WIDTHS
+            "original_widths": cfg.ANYNET.ORIGINAL_WIDTHS,
+            "mb_ver": cfg.ANYNET.MB_VER,
+            "act_fun": cfg.ANYNET.ACTIVATION_FUN if cfg.ANYNET.ACTIVATION_FUN else [None for _ in cfg.ANYNET.DEVICES],
         }
 
     def __init__(self, params=None):
@@ -486,15 +492,31 @@ class AnyNet(Module):
         self.stem = stem_fun(3, p["stem_w"], p["stem_k"])
         prev_w = p["stem_w"]
         keys = ["depths", "widths", "strides", "bot_muls", "group_ws", "original_widths", "kernels"]
+        afs = p["act_fun"]
 
-        for i, (ds, ws, ss, b, gs, o, k) in enumerate(zip(*[p[k] for k in keys])):
+        for i, (ds, ws, ss, bs, gs, o, k) in enumerate(zip(*[p[k] for k in keys])):
             stage_branches = []
             if gs is None:
                 gs = [None for _ in ds]
-            for j, (d, w, s, g) in enumerate(zip(ds, ws, ss, gs)):
-                params = {"bot_mul": b, "group_w": g, "se_r": p["se_r"], "k": k}
-                stage_branches.append(AnyStage(prev_w, w, s, d, block_fun, params))
-            self.add_module("s{}".format(i + 1), BranchStage(stage_branches, o, ws, ws))
+            if not isinstance(bs, list):
+                bs = [bs for _ in ds]
+            for j, (d, w, s, b, g, af) in enumerate(zip(ds, ws, ss, bs, gs, afs)):
+                params = {"bot_mul": b, "group_w": g, "se_r": p["se_r"], "k": k, "af": af}
+                if p["mb_ver"] == 1:
+                    w_in = make_divisible(w / o * prev_w, 8)
+                    branch = nn.Sequential(
+                        conv2d(prev_w, w_in, 1),
+                        norm2d(w_in),
+                        AnyStage(w_in, w, s, d, block_fun, params),
+                    )
+                elif p["mb_ver"] == 2:
+                    branch = AnyStage(prev_w, w, s, d, block_fun, params)
+                stage_branches.append(branch)
+            if p["mb_ver"] == 1:
+                w_outs = None
+            elif p["mb_ver"] == 2:
+                w_outs = ws
+            self.add_module("s{}".format(i + 1), BranchStage(stage_branches, o, ws, w_outs))
             prev_w = o
 
         self.head = AnyHead(prev_w, p["head_w"], p["num_classes"])
@@ -514,14 +536,22 @@ class AnyNet(Module):
         cx = stem_fun.complexity(cx, 3, p["stem_w"], p["stem_k"])
         prev_w = p["stem_w"]
         keys = ["depths", "widths", "strides", "bot_muls", "group_ws", "original_widths", "kernels"]
-        for i, (ds, ws, ss, b, gs, o, k) in enumerate(zip(*[p[k] for k in keys])):
+        for i, (ds, ws, ss, bs, gs, o, k) in enumerate(zip(*[p[k] for k in keys])):
             if gs is None:
                 gs = [None for _ in ds]
+            if not isinstance(bs, list):
+                bs = [bs for _ in ds]
             old_h, old_w = cx["h"], cx["w"]
-            for j, (d, w, s, g) in enumerate(zip(ds, ws, ss, gs)):
+            for j, (d, w, s, b, g) in enumerate(zip(ds, ws, ss, bs, gs)):
                 params = {"bot_mul": b, "group_w": g, "se_r": p["se_r"], "k": k}
                 cx["h"], cx["w"] = old_h, old_w
-                cx = AnyStage.complexity(cx, prev_w, w, s, d, block_fun, params)
+                if p["mb_ver"] == 1:
+                    w_in = make_divisible(w / o * prev_w, 8)
+                    cx = conv2d_cx(cx, prev_w, w_in, 1)
+                    cx = norm2d_cx(cx, w_in)
+                    cx = AnyStage.complexity(cx, w_in, w, s, d, block_fun, params)
+                elif p["mb_ver"] == 2:
+                    cx = AnyStage.complexity(cx, prev_w, w, s, d, block_fun, params)
             prev_w = o
         cx = AnyHead.complexity(cx, prev_w, p["head_w"], p["num_classes"])
         return cx
