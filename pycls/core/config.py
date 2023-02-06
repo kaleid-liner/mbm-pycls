@@ -113,6 +113,10 @@ _C.ANYNET.HEAD_DEVICE = "cpu"
 
 _C.ANYNET.MERGE_DEVICE = "cpu"
 
+_C.ANYNET.MB_VER = 2
+
+_C.ANYNET.ACTIVATION_FUN = []
+
 
 # ---------------------------------- RegNet options ---------------------------------- #
 _C.REGNET = CfgNode()
@@ -473,6 +477,8 @@ _C.PORT_RANGE = [10000, 65000]
 
 # Models weights referred to by URL are downloaded to this local cache
 _C.DOWNLOAD_CACHE = "/tmp/pycls-download-cache"
+
+_C.DATA_PATH = ""
 
 
 # ---------------------------------- Default config ---------------------------------- #

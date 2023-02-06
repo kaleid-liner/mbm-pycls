@@ -45,6 +45,10 @@ def main():
     # torch.onnx.export(net, torch.randn(1, 3, 224, 224), args.output + ".onnx")
 
     net = anynet()
+    net.eval()
+    torch.onnx.export(net, torch.randn(1, 3, 224, 224), args.output + (".quant" if args.quant else "") + ".onnx")
+
+    # net.summary()
 
     converter = tf.lite.TFLiteConverter.from_keras_model(net)
     if args.quant:
