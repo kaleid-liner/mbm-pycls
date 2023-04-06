@@ -141,6 +141,6 @@ def multi_proc_run(num_proc, fun):
         # Note: using "fork" below, "spawn" causes time and error regressions. Using
         # spawn changes the default multiprocessing context to spawn, which doesn't
         # interact well with the dataloaders (likely due to the use of OpenCV).
-        mp_runner(single_proc_run, args=args, nprocs=num_proc, start_method="fork")
+        mp_runner(single_proc_run, args=args, nprocs=num_proc, start_method="spawn")
     else:
         fun()

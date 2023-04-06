@@ -35,7 +35,7 @@ _TYPE = "_type"
 def _suppress_print():
     """Suppresses printing from the current process."""
 
-    def ignore(*_objects, _sep=" ", _end="\n", _file=sys.stdout, _flush=False):
+    def ignore(*_objects, _sep=" ", _end="\n", _file=sys.stdout, _flush=False, **kwargs):
         pass
 
     builtins.print = ignore
