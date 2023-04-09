@@ -14,3 +14,4 @@ simplejson
 submitit
 yacs
 yattag
+tensorflow

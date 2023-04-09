@@ -1,4 +1,3 @@
-from tkinter import W
 import keras.layers as layers
 import keras
 import tensorflow as tf
