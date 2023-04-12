@@ -212,7 +212,7 @@ def anystage(x, w_in, w_out, stride, d, block_fun, name, params):
 
 def meeting_point(inputs, w_ins, o_w, w_outs=None, names=None):
     if len(inputs) == 1:
-        return inputs[0]
+        return layers.Concatenate(name=names[-1] + "_concat")(inputs)
     if w_outs is None:
         w_outs = [o_w // len(inputs)] * len(inputs)
     return layers.Concatenate(name=names[-1] + "_concat")([
@@ -267,6 +267,10 @@ def anynet(input_shape=(224, 224, 3), include_head=True, include_stem=True):
             gs = [None for _ in ds]
         if not isinstance(bs, list):
             bs = [bs for _ in ds]
+        if len(ds) < 2:
+            branching = False
+        else:
+            branching = True
         for j, (device, d, w, s, b, g) in enumerate(zip(devices, ds, ws, ss, bs, gs)):
             params = {"bot_mul": b, "group_w": g, "se_r": p["se_r"], "k": k}
             if p["mb_downsample"]:
@@ -281,7 +285,7 @@ def anynet(input_shape=(224, 224, 3), include_head=True, include_stem=True):
                 else:
                     x_out = x
                 d, s, prev_w = d - 1, 1, w
-            if p["mb_ver"] == 1:
+            if p["mb_ver"] == 1 and branching:
                 w_in = make_divisible(w / o * prev_w, 8)
                 x_out = layers.Conv2D(w_in, 1, padding="same",
                     name="s{}_{}_convfirst".format(i + 1, device))(x_out)
@@ -293,7 +297,7 @@ def anynet(input_shape=(224, 224, 3), include_head=True, include_stem=True):
                 x_out = anystage(x_out, prev_w, w, s, d, block_fun, 
                     "s{}_{}".format(i + 1, device), params)
             x_outs.append(x_out)
-        mp_start = p["mb_downsample"] and i != len(p["depths"]) - 1
+        mp_start = p["mb_downsample"] and i != len(p["depths"]) - 1 and (len(p["depths"][i + 1]) > 1)
         names = ["s{}_{}".format(i + 1, d) for d in devices]
         names.append("s{}_{}{}_{}".format(
             i + 1,

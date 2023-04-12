@@ -375,6 +375,8 @@ _C.TEST.IM_SIZE = 256
 # Weights to use for testing
 _C.TEST.WEIGHTS = ""
 
+_C.TEST.POWERSAVE_LEVEL = 255
+
 
 # ------------------------------- Data loader options -------------------------------- #
 _C.DATA_LOADER = CfgNode()

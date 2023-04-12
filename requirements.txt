@@ -15,3 +15,4 @@ submitit
 yacs
 yattag
 tensorflow
+silence_tensorflow

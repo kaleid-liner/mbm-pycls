@@ -536,7 +536,11 @@ class AnyNet(Module):
         cx = stem_fun.complexity(cx, 3, p["stem_w"], p["stem_k"])
         prev_w = p["stem_w"]
         keys = ["depths", "widths", "strides", "bot_muls", "group_ws", "original_widths", "kernels"]
+        stage_flops = []
+        stage_params = []
+        stage_acts = []
         for i, (ds, ws, ss, bs, gs, o, k) in enumerate(zip(*[p[k] for k in keys])):
+            old_cx = cx
             if gs is None:
                 gs = [None for _ in ds]
             if not isinstance(bs, list):
@@ -552,6 +556,14 @@ class AnyNet(Module):
                     cx = AnyStage.complexity(cx, w_in, w, s, d, block_fun, params)
                 elif p["mb_ver"] == 2:
                     cx = AnyStage.complexity(cx, prev_w, w, s, d, block_fun, params)
+            stage_flops.append(cx["flops"] - old_cx["flops"])
+            stage_params.append(cx["params"] - old_cx["params"])
+            stage_acts.append(cx["acts"] - old_cx["acts"])
             prev_w = o
         cx = AnyHead.complexity(cx, prev_w, p["head_w"], p["num_classes"])
+        cx.update({
+            "stage_flops": stage_flops,
+            "stage_params": stage_params,
+            "stage_acts": stage_acts,
+        })
         return cx
