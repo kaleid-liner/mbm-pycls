@@ -256,9 +256,10 @@ def anynet(input_shape=(224, 224, 3), include_head=True, include_stem=True):
     keys = ["depths", "widths", "strides", "bot_muls", "group_ws", "original_widths", "kernels"]
     devices = p["devices"]
 
+    mp_start = p["mb_downsample"] and len(p["depths"][0]) > 1
     x = stem_fun(img_input, 3, p["stem_w"], p["stem_k"], 
         name="st_{}".format(p["stem_device"]),
-        mp_start=p["mb_downsample"]
+        mp_start=mp_start
     )
 
     for i, (ds, ws, ss, bs, gs, o, k) in enumerate(zip(*[p[k] for k in keys])):
@@ -293,7 +294,7 @@ def anynet(input_shape=(224, 224, 3), include_head=True, include_stem=True):
                     name="s{}_{}_convfirst_bn".format(i + 1, device))(x_out)
                 x_out = anystage(x_out, w_in, w, s, d, block_fun, 
                     "s{}_{}".format(i + 1, device), params)
-            elif p["mb_ver"] == 2:
+            else:
                 x_out = anystage(x_out, prev_w, w, s, d, block_fun, 
                     "s{}_{}".format(i + 1, device), params)
             x_outs.append(x_out)
