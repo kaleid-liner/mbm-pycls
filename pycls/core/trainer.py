@@ -328,16 +328,16 @@ def test_model():
     # Setup training/testing environment
     setup_env()
     # Construct the model
-    model, _ = setup_model()
+    model, ema, distiller = setup_model()
     # Load model weights
     test_weights = get_weights_file(cfg.TEST.WEIGHTS)
-    cp.load_checkpoint(test_weights, model)
+    cp.load_checkpoint(test_weights, model, ema)
     logger.info("Loaded model weights from: {}".format(test_weights))
     # Create data loaders and meters
     test_loader = data_loader.construct_test_loader()
     test_meter = meters.TestMeter(len(test_loader))
     # Evaluate the model
-    test_epoch(test_loader, model, test_meter, 0)
+    test_epoch(test_loader, ema, test_meter, 0)
 
 
 def time_model():
