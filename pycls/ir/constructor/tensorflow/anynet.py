@@ -202,9 +202,10 @@ def anyhead(x, w_in, head_width, num_classes, name):
     return x
 
 
-def anystage(x, w_in, w_out, stride, d, block_fun, name, params):
+def anystage(x, w_in, w_out, stride, d, block_fun, name, params, mp_start=False):
     for i in range(d):
-        x = block_fun(x, w_in, w_out, stride, name + "_b{}".format(i + 1), params)
+        is_mp_start = mp_start and (i == d - 1)
+        x = block_fun(x, w_in, w_out, stride, name + "_b{}".format(i + 1), params, is_mp_start)
         stride, w_in = 1, w_out
 
     return x
@@ -295,8 +296,9 @@ def anynet(input_shape=(224, 224, 3), include_head=True, include_stem=True):
                 x_out = anystage(x_out, w_in, w, s, d, block_fun, 
                     "s{}_{}".format(i + 1, device), params)
             else:
+                mp_start = p["mb_downsample"] and i != len(p["depths"]) - 1 and (len(p["depths"][i + 1]) > 1) and not branching
                 x_out = anystage(x_out, prev_w, w, s, d, block_fun, 
-                    "s{}_{}".format(i + 1, device), params)
+                    "s{}_{}".format(i + 1, device), params, mp_start)
             x_outs.append(x_out)
         mp_start = p["mb_downsample"] and i != len(p["depths"]) - 1 and (len(p["depths"][i + 1]) > 1)
         names = ["s{}_{}".format(i + 1, d) for d in devices]
